@@ -2,9 +2,7 @@ from pathlib import Path
 import pdfplumber
 import pandas as pd
 import re
-from tqdm import tqdm
 from datetime import datetime
-from openpyxl.styles import numbers
 
 # === SETUP ===
 BASE_DIR = Path(__file__).resolve().parent
@@ -24,14 +22,21 @@ def parse_bl(pdf_path, subfolder):
         return None
 
     text = text.replace('\n', ' ')
-
+    
     no_bl = re.search(r'\b\d{3}-\d{2}/[A-Z]+-[A-Z]+/[A-Z]+/\d{4}\b', text)
+    
+    # Cari tanggal format Indonesia/English
     tanggal = re.search(
-        r'\b\d{1,2} (January|February|March|April|May|June|July|August|September|October|November|December|'
-        r'Januari|Februari|Maret|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember) \d{4}\b',
+        r'\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December|'
+        r'Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s+\d{4}',
         text, re.IGNORECASE
     )
-
+    
+    if tanggal:
+        print(f"✅ Date found in {pdf_path.name}: {tanggal.group()}")
+    else:
+        print(f"❌ No date found in {pdf_path.name}")
+    
     qty_matches = re.findall(r'([\d.,]+)\s*WMT', text, re.IGNORECASE)
     qty = qty_matches[-1] if qty_matches else ''
     qty = qty.replace('WMT', '').replace('%', '').strip()
@@ -106,6 +111,41 @@ def process_all():
                     data.append(parsed)
     return pd.DataFrame(data)
 
+# === CONVERT TANGGAL - FIXED! ===
+def convert_tanggal(tanggal_str):
+    """Convert Indonesian date to datetime"""
+    if not tanggal_str or pd.isna(tanggal_str) or tanggal_str == '':
+        return pd.NaT
+    
+    # Mapping bulan Indonesia ke English - LENGKAP!
+    bulan_indo = {
+        'Januari': 'January', 
+        'Februari': 'February', 
+        'Maret': 'March',
+        'April': 'April',          # DITAMBAH
+        'Mei': 'May', 
+        'Juni': 'June', 
+        'Juli': 'July', 
+        'Agustus': 'August', 
+        'September': 'September',  # DITAMBAH
+        'Oktober': 'October', 
+        'November': 'November',    # DITAMBAH
+        'Desember': 'December'
+    }
+    
+    # Replace Indonesian month names (case insensitive)
+    for indo, eng in bulan_indo.items():
+        tanggal_str = re.sub(indo, eng, tanggal_str, flags=re.IGNORECASE)
+    
+    try:
+        return pd.to_datetime(tanggal_str, format='%d %B %Y')
+    except:
+        try:
+            return pd.to_datetime(tanggal_str, dayfirst=True)
+        except:
+            print(f"⚠️  Failed to parse date: {tanggal_str}")
+            return pd.NaT
+
 # === MAIN ===
 def main():
     print("📦 SHIPPING PARSER (BL + SI, Multi-Subfolder Mode, Skip Draught Survey)")
@@ -115,11 +155,15 @@ def main():
         print("\n❌ No data found in any subfolder.")
         return
 
-    df['Tanggal_BL'] = pd.to_datetime(df['Tanggal_BL'], dayfirst=True, errors='coerce')
+    # Convert tanggal column
+    print("\n🔄 Converting dates...")
+    df['Tanggal_BL'] = df['Tanggal_BL'].apply(convert_tanggal)
     df = df.sort_values(by=['Subfolder', 'Doc_Type'])
 
     df.to_excel(OUTPUT_FILE, index=False)
     print(f"\n✅ Output file created: {OUTPUT_FILE}")
+    print(f"\n📊 Summary:")
+    print(df[['File', 'Doc_Type', 'Tanggal_BL', 'Qty_WMT']].to_string())
 
 if __name__ == "__main__":
     main()
